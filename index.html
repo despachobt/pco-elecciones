@@ -58,11 +58,7 @@
   .lp .seds .num{display:inline-block;width:16px;height:16px;line-height:16px;text-align:center;
        background:var(--sed);color:#fff;border-radius:50%;font-size:10px;margin-right:5px}
   .dim{opacity:.18}
-  /* Buscador por nombre */
-  .search-row{display:flex;gap:6px}
-  #btnBuscar{padding:7px 14px;border:0;border-radius:6px;background:#2c6fbb;color:#fff;
-       cursor:pointer;font-size:13px;font-weight:600;white-space:nowrap}
-  #btnBuscar:hover{background:#3a83d6}
+  /* Dropdown de resultados */
   .results{position:absolute;top:100%;left:0;right:0;margin-top:4px;background:#fff;
        border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.35);max-height:300px;overflow-y:auto;
        z-index:1200;color:#16314f}
@@ -92,11 +88,18 @@
     <div class="filters">
       <div class="field" style="position:relative">
         <label for="fName">Buscar por nombre del local</label>
-        <div class="search-row">
-          <input id="fName" type="text" placeholder="Escribe parte del nombre (ej: INNOVA, SAN MARCOS)…" autocomplete="off">
-          <button id="btnBuscar">🔎 Buscar</button>
-        </div>
+        <input id="fName" type="text" placeholder="Escribe parte del nombre (ej: INNOVA, SAN MARCOS)…" autocomplete="off">
         <div id="results" class="results" hidden></div>
+      </div>
+      <div class="field">
+        <label for="fDistrito">Filtrar por distrito</label>
+        <input id="fDistrito" type="text" list="distritoList" placeholder="Todos los distritos" autocomplete="off">
+        <datalist id="distritoList"></datalist>
+      </div>
+      <div class="field" style="position:relative">
+        <label for="fDir">Buscar por dirección</label>
+        <input id="fDir" type="text" placeholder="Ej: AV UNIVERSITARIA, JR LIMA…" autocomplete="off">
+        <div id="resultsDir" class="results" hidden></div>
       </div>
       <div class="field">
         <label for="fAlim">Filtrar por alimentador</label>
@@ -183,7 +186,7 @@ const locEntries = DATA.locales.map(loc=>{
       <a class="gmaps" href="${gmaps}" target="_blank" rel="noopener">📍 Ver en Google Maps</a>
       <div class="seds"><b>3 subestaciones más cercanas</b>${sedsHtml||"<div class='d'>Sin datos</div>"}</div>
     </div>`,{maxWidth:300});
-  return {loc, marker:m, nameN:norm(loc.nombre), alims:loc.alims||[]};
+  return {loc, marker:m, nameN:norm(loc.nombre), distN:norm(loc.distrito), dirN:norm(loc.direccion), alims:loc.alims||[]};
 });
 locEntries.forEach(e=>locLayer.addLayer(e.marker));
 
@@ -212,14 +215,23 @@ const fName = document.getElementById("fName");
 const fAlim = document.getElementById("fAlim");
 const elCount = document.getElementById("count");
 const elResults = document.getElementById("results");
+const elResultsDir = document.getElementById("resultsDir");
+const fDistrito = document.getElementById("fDistrito");
+const fDir = document.getElementById("fDir");
 const dl = document.getElementById("alimList");
 DATA.alimentadores.forEach(a=>{
   const o=document.createElement("option"); o.value=a; dl.appendChild(o);
 });
+// Rellenar datalist de distritos (únicos, ordenados)
+const dlDist = document.getElementById("distritoList");
+const distritos = [...new Set(DATA.locales.map(l=>l.distrito).filter(Boolean))].sort();
+distritos.forEach(d=>{ const o=document.createElement("option"); o.value=d; dlDist.appendChild(o); });
 
 // Aplica los filtros al mapa. Si fit=true, encaja la vista a los locales visibles.
 function applyFilters(fit){
   const q = norm(fName.value.trim());
+  const qDist = norm(fDistrito.value.trim());
+  const qDir = norm(fDir.value.trim());
   const alim = fAlim.value.trim().toUpperCase();
   const alimActive = alim && DATA.alimentadores.includes(alim);
   let shown=0, served=0;
@@ -227,9 +239,11 @@ function applyFilters(fit){
 
   locEntries.forEach(e=>{
     const okName = !q || e.nameN.includes(q);
+    const okDist = !qDist || e.distN.includes(qDist);
+    const okDir  = !qDir  || e.dirN.includes(qDir);
     const isServed = alimActive && e.alims.includes(alim);
     const okAlim = !alimActive || isServed;
-    const visible = okName && okAlim;
+    const visible = okName && okDist && okDir && okAlim;
     if(visible){
       if(!locLayer.hasLayer(e.marker)) locLayer.addLayer(e.marker);
       shown++;
@@ -310,30 +324,75 @@ function searchByName(){
   applyFilters(true);
 }
 
+// ---- Búsqueda por dirección (mismo comportamiento que por nombre) ----
+function matchesForDir(q){
+  const nq=norm((q||"").trim());
+  if(!nq) return [];
+  return locEntries.filter(e=>e.dirN.includes(nq));
+}
+function renderResultsDir(matches){
+  elResultsDir.innerHTML="";
+  if(!matches.length){
+    elResultsDir.innerHTML='<div class="result-empty">Sin coincidencias.</div>';
+    elResultsDir.hidden=false; return;
+  }
+  matches.slice(0,MAX_RESULTS).forEach(e=>{
+    const color=CONF_COLORS[e.loc.conf]||CONF_COLORS["SIN DATO"];
+    const it=document.createElement("div"); it.className="result-item";
+    it.innerHTML=`<span class="rdot" style="background:${color}"></span>
+      <span><span class="rname">${esc(e.loc.direccion||"—")}</span>`+
+      `<span class="rmeta"> · ${esc(e.loc.nombre)} · ${esc(e.loc.distrito||"")}</span></span>`;
+    it.addEventListener("click",()=>{
+      fDir.value=e.loc.direccion; elResultsDir.hidden=true;
+      applyFilters(false); gotoLocal(e);
+    });
+    elResultsDir.appendChild(it);
+  });
+  if(matches.length>MAX_RESULTS){
+    const more=document.createElement("div"); more.className="result-more";
+    more.textContent=`…y ${matches.length-MAX_RESULTS} más. Pulsa Buscar para verlos todos en el mapa.`;
+    elResultsDir.appendChild(more);
+  }
+  elResultsDir.hidden=false;
+}
+function searchByDir(){
+  const q=fDir.value.trim();
+  if(q.length<1){ elResultsDir.hidden=true; applyFilters(false); return; }
+  const matches=matchesForDir(q);
+  renderResultsDir(matches);
+  applyFilters(true);
+}
+
 let t=null;
-// Al escribir solo se actualiza la lista de sugerencias; el mapa se filtra al pulsar Buscar/Enter.
+// Al escribir: dropdown + filtro de mapa en tiempo real (debounce).
 fName.addEventListener("input",()=>{
   clearTimeout(t);
-  t=setTimeout(()=>{
-    const q=fName.value.trim();
-    if(q.length<1){ elResults.hidden=true; return; }
-    renderResults(matchesFor(q));
-  },150);
+  t=setTimeout(()=>searchByName(),180);
 });
 fName.addEventListener("keydown",ev=>{ if(ev.key==="Enter"){ ev.preventDefault(); searchByName(); }});
-fName.addEventListener("focus",()=>{ if(fName.value.trim()) renderResults(matchesFor(fName.value)); });
-document.getElementById("btnBuscar").addEventListener("click",searchByName);
-// Cerrar la lista al hacer clic fuera del campo.
+fName.addEventListener("focus",()=>{ if(fName.value.trim()) searchByName(); });
+// Cerrar listas al hacer clic fuera.
 document.addEventListener("click",ev=>{
-  if(!elResults.contains(ev.target) && ev.target!==fName && ev.target.id!=="btnBuscar")
+  if(!elResults.contains(ev.target) && ev.target!==fName)
     elResults.hidden=true;
+  if(!elResultsDir.contains(ev.target) && ev.target!==fDir)
+    elResultsDir.hidden=true;
 });
 
 fAlim.addEventListener("change",()=>applyFilters(true));
 fAlim.addEventListener("input",()=>{clearTimeout(t);t=setTimeout(()=>applyFilters(false),250);});
+fDistrito.addEventListener("change",()=>applyFilters(true));
+fDistrito.addEventListener("input",()=>{clearTimeout(t);t=setTimeout(()=>applyFilters(true),250);});
+// Dirección: dropdown + filtro de mapa en tiempo real (debounce).
+fDir.addEventListener("input",()=>{
+  clearTimeout(t);
+  t=setTimeout(()=>searchByDir(),180);
+});
+fDir.addEventListener("keydown",ev=>{ if(ev.key==="Enter"){ ev.preventDefault(); searchByDir(); }});
+fDir.addEventListener("focus",()=>{ if(fDir.value.trim()) searchByDir(); });
 
 document.getElementById("btnClear").addEventListener("click",()=>{
-  fName.value=""; fAlim.value=""; elResults.hidden=true;
+  fName.value=""; fAlim.value=""; fDistrito.value=""; fDir.value=""; elResults.hidden=true; elResultsDir.hidden=true;
   applyFilters(false); map.setView([-11.95,-77.02],11);
 });
 
